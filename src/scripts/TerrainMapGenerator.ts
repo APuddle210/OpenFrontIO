@@ -1,24 +1,9 @@
-import { decodePNGFromStream } from "pureimage";
-import path from "path";
-import fs from "fs/promises";
-import { createReadStream } from "fs";
-import { fileURLToPath } from "url";
+import { decodePNGFromStream, Bitmap } from "pureimage";
+//import path from "path";
+//import fs from "fs/promises";
+//import { createReadStream } from "fs";
+import { Readable } from "stream";
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const maps = [
-  "Africa",
-  "Asia",
-  "WorldMap",
-  "BlackSea",
-  "Europe",
-  "Mars",
-  "Mena",
-  "Oceania",
-  "NorthAmerica",
-  "SouthAmerica",
-];
 const min_island_size = 30;
 
 interface Coord {
@@ -38,21 +23,15 @@ class Terrain {
   constructor(public type: TerrainType) {}
 }
 
-async function loadTerrainMap(mapName: string): Promise<void> {
-  const imagePath = path.resolve(
-    __dirname,
-    "..",
-    "..",
-    "resources",
-    "maps",
-    mapName + ".png",
-  );
+export async function generateMap(
+  imageBuffer: Buffer,
+  removeSmall = true,
+): Promise<{ map: Uint8Array; miniMap: Uint8Array; thumb: Bitmap }> {
+  const stream = Readable.from(imageBuffer);
+  const img = await decodePNGFromStream(stream);
 
-  const readStream = createReadStream(imagePath);
-  const img = await decodePNGFromStream(readStream);
-
-  console.log(`${mapName}: Image loaded successfully`);
-  console.log(`${mapName}: `, "Image dimensions:", img.width, "x", img.height);
+  console.log("Image loaded successfully");
+  console.log("Image dimensions:", img.width, "x", img.height);
 
   const terrain: Terrain[][] = Array(img.width)
     .fill(null)
@@ -78,35 +57,22 @@ async function loadTerrainMap(mapName: string): Promise<void> {
     }
   }
 
-  removeSmallIslands(terrain);
-  removeSmallLakes(mapName, terrain);
+  if (removeSmall) {
+    removeSmallIslands(terrain);
+    removeSmallLakes(terrain);
+  }
   const shorelineWaters = processShore(terrain);
   processDistToLand(shorelineWaters, terrain);
   processOcean(terrain);
-  const outputPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "resources",
-    "maps",
-    mapName + ".bin",
-  );
-  fs.writeFile(outputPath, packTerrain(mapName, terrain));
 
   const miniTerrain = await createMiniMap(terrain);
-  const miniOutputPath = path.join(
-    __dirname,
-    "..",
-    "..",
-    "resources",
-    "maps",
-    mapName + "Mini.bin",
-  );
-  fs.writeFile(miniOutputPath, packTerrain(mapName, miniTerrain));
-}
+  const thumb = await createMapThumbnail(miniTerrain);
 
-export async function loadTerrainMaps() {
-  await Promise.all(maps.map((map) => loadTerrainMap(map)));
+  return {
+    map: packTerrain(terrain),
+    miniMap: packTerrain(miniTerrain),
+    thumb: thumb,
+  };
 }
 
 export async function createMiniMap(tm: Terrain[][]): Promise<Terrain[][]> {
@@ -225,7 +191,7 @@ function processOcean(map: Terrain[][]) {
   }
 }
 
-function packTerrain(mapName: string, map: Terrain[][]): Uint8Array {
+function packTerrain(map: Terrain[][]): Uint8Array {
   const width = map.length;
   const height = map[0].length;
   const packedData = new Uint8Array(4 + width * height);
@@ -262,7 +228,7 @@ function packTerrain(mapName: string, map: Terrain[][]): Uint8Array {
       packedData[4 + y * width + x] = packedByte;
     }
   }
-  logBinaryAsBits(mapName, packedData);
+  logBinaryAsBits(packedData);
   return packedData;
 }
 
@@ -315,13 +281,11 @@ function removeSmallIslands(map: Terrain[][]) {
   }
 }
 
-function removeSmallLakes(mapName: string, map: Terrain[][]) {
+function removeSmallLakes(map: Terrain[][]) {
   const visited = new Set<string>();
   const min_lake_size = 200;
 
-  console.log(
-    `${mapName}: removing small lakes ${map.length}, ${map[0].length}`,
-  );
+  console.log(`removing small lakes ${map.length}, ${map[0].length}`);
 
   for (let x = 0; x < map.length; x++) {
     for (let y = 0; y < map[0].length; y++) {
@@ -341,15 +305,11 @@ function removeSmallLakes(mapName: string, map: Terrain[][]) {
   }
 }
 
-function logBinaryAsBits(
-  mapName: string,
-  data: Uint8Array,
-  length: number = 8,
-) {
+function logBinaryAsBits(data: Uint8Array, length: number = 8) {
   const bits = Array.from(data.slice(0, length))
     .map((b) => b.toString(2).padStart(8, "0"))
     .join(" ");
-  console.log(`${mapName}: Binary data (bits):`, bits);
+  console.log(`Binary data (bits):`, bits);
 }
 
 function getNeighborCoords(x: number, y: number, map: Terrain[][]): Coord[] {
@@ -369,4 +329,68 @@ function getNeighborCoords(x: number, y: number, map: Terrain[][]): Coord[] {
   return coords;
 }
 
-await loadTerrainMaps();
+async function createMapThumbnail(map: Terrain[][]): Promise<Bitmap> {
+  console.log("creating thumbnail");
+  const bitmap = new Bitmap(map.length, map[0].length);
+  for (let x = 0; x < bitmap.width; x++) {
+    for (let y = 0; y < bitmap.height; y++) {
+      const rgba = getThumbnailColor(map[x][y]);
+      bitmap.setPixelRGBA_i(x, y, rgba.r, rgba.g, rgba.b, rgba.a);
+    }
+  }
+  return bitmap;
+}
+
+function getThumbnailColor(t: Terrain): {
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+} {
+  if (t.type === TerrainType.Water) {
+    //shoreline water
+    if (t.shoreline) return { r: 100, g: 143, b: 255, a: 0 };
+    //all other water
+    const waterAdjRGB: number = 11 - Math.min(t.magnitude / 2, 10) - 10;
+    return {
+      r: Math.max(70 + waterAdjRGB, 0),
+      g: Math.max(132 + waterAdjRGB, 0),
+      b: Math.max(180 + waterAdjRGB, 0),
+      a: 0,
+    };
+  }
+  //shoreline land
+  if (t.shoreline) {
+    return { r: 204, g: 203, b: 158, a: 255 };
+  }
+  let adjRGB: number;
+  switch (true) {
+    //plains
+    case t.magnitude < 10:
+      adjRGB = 220 - 2 * t.magnitude;
+      return {
+        r: 190,
+        g: adjRGB,
+        b: 138,
+        a: 255,
+      };
+    //highlands
+    case t.magnitude < 20:
+      adjRGB = 2 * t.magnitude;
+      return {
+        r: 200 + adjRGB,
+        g: 183 + adjRGB,
+        b: 138 + adjRGB,
+        a: 255,
+      };
+    //mountains
+    case t.magnitude >= 20:
+      adjRGB = Math.floor(230 + t.magnitude / 2);
+      return {
+        r: adjRGB,
+        g: adjRGB,
+        b: adjRGB,
+        a: 255,
+      };
+  }
+}

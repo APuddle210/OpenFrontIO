@@ -98,6 +98,7 @@ export interface ServerConfig {
   workerPort(gameID: GameID): number;
   workerPortByIndex(workerID: number): number;
   env(): GameEnv;
+  region(): string;
   adminToken(): string;
   adminHeader(): string;
   // Only available on the server
@@ -170,6 +171,7 @@ export interface Config {
 
 export interface Theme {
   territoryColor(playerInfo: PlayerInfo): Colord;
+  specialBuildingColor(playerInfo: PlayerInfo): Colord;
   borderColor(playerInfo: PlayerInfo): Colord;
   defendedBorderColor(playerInfo: PlayerInfo): Colord;
   terrainColor(gm: GameMap, tile: TileRef): Colord;

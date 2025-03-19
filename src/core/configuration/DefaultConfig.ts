@@ -23,6 +23,12 @@ import { pastelTheme } from "./PastelTheme";
 import { pastelThemeDark } from "./PastelThemeDark";
 
 export abstract class DefaultServerConfig implements ServerConfig {
+  region(): string {
+    if (this.env() == GameEnv.Dev) {
+      return "dev";
+    }
+    return process.env.REGION;
+  }
   gitCommit(): string {
     return process.env.GIT_COMMIT;
   }
@@ -49,7 +55,7 @@ export abstract class DefaultServerConfig implements ServerConfig {
     return 100;
   }
   gameCreationRate(): number {
-    return 60 * 1000;
+    return 30 * 1000;
   }
   lobbyMaxPlayers(map: GameMapType): number {
     if (map == GameMapType.World) {
@@ -409,7 +415,7 @@ export class DefaultConfig implements Config {
           (defender.isTraitor() ? this.traitorDefenseDebuff() : 1),
         defenderTroopLoss: defender.troops() / defender.numTilesOwned(),
         tilesPerTickUsed:
-          within(defender.troops() / (4 * attackTroops), 0.2, 1.5) *
+          within(defender.troops() / (5 * attackTroops), 0.2, 1.5) *
           speed *
           largeModifier,
       };
